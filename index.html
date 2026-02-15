@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Right Point - Thermal Print</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .printer-card { background: white; width: 450px; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border-top: 6px solid #28a745; }
+        .header-info { background: #f8f9fa; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 15px; border: 1px dashed #ccc; text-align: center; }
+        h2 { margin-top: 0; color: #333; text-align: center; }
+        textarea { width: 100%; height: 120px; border: 1px solid #ddd; border-radius: 8px; padding: 12px; font-size: 14px; box-sizing: border-box; margin-bottom: 15px; }
+        .settings { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; }
+        select { padding: 8px; border-radius: 5px; border: 1px solid #ddd; flex-grow: 1; }
+        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        button { padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        .btn-print { background: #28a745; color: white; grid-column: span 2; font-size: 16px; }
+        .btn-print:hover { background: #218838; }
+        .btn-feed { background: #6c757d; color: white; }
+        .btn-clear { background: #dc3545; color: white; }
+        .status { margin-top: 20px; font-size: 13px; color: #666; text-align: center; border-top: 1px solid #eee; padding-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="printer-card">
+    <h2>Right Point Printer</h2>
+    
+    <div class="header-info">
+        <strong>Default Header:</strong><br>
+        Right Point, Kewatkhali Near Dhaka Rail Crossing, Sadar, Mymensingh
+    </div>
+
+    <textarea id="smsInput" placeholder="প্রিন্ট করার জন্য এসএমএস এখানে লিখুন..."></textarea>
+    
+    <div class="settings">
+        <label>ফন্ট সাইজ:</label>
+        <select id="fontSize">
+            <option value="0">Normal (ছোট)</option>
+            <option value="16">Medium (মাঝারি)</option>
+            <option value="32">Large (বড়)</option>
+            <option value="48">Extra Large (খুব বড়)</option>
+        </select>
+    </div>
+
+    <div class="btn-group">
+        <button class="btn-print" onclick="handlePrint()">🖨️ প্রিন্ট করুন</button>
+        <button class="btn-feed" onclick="sendAction('feed')">কাগজ বের করুন</button>
+        <button class="btn-clear" onclick="clearText()">মুছে ফেলুন</button>
+    </div>
+
+    <div id="status" class="status">প্রিন্টার সংযুক্ত নেই</div>
+</div>
+
+<script>
+let printerCharacteristic = null;
+const COMMON_SERVICES = [
+    '0000ff00-0000-1000-8000-00805f9b34fb',
+    '000018f0-0000-1000-8000-00805f9b34fb',
+    '49535343-fe7d-4ae5-8fa9-9fafd205e455'
+];
+
+// বর্তমান সময় ফরম্যাট করার ফাংশন (DD-Feb-YY HH:MM AM/PM)
+function getCurrentDateTime() {
+    const now = new Date();
+    const options = { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true };
+    return now.toLocaleString('en-GB', options).replace(',', '');
+}
+
+async function connectPrinter() {
+    try {
+        updateStatus("প্রিন্টার খোঁজা হচ্ছে...");
+        const device = await navigator.bluetooth.requestDevice({
+            filters: [{ namePrefix: '581PW' }, { namePrefix: 'Deli' }, { namePrefix: 'Printer' }],
+            optionalServices: COMMON_SERVICES
+        });
+
+        const server = await device.gatt.connect();
+        
+        for (const uuid of COMMON_SERVICES) {
+            try {
+                const service = await server.getPrimaryService(uuid);
+                const chars = await service.getCharacteristics();
+                printerCharacteristic = chars.find(c => c.properties.write || c.properties.writeWithoutResponse);
+                if (printerCharacteristic) break;
+            } catch (e) { continue; }
+        }
+
+        if (printerCharacteristic) {
+            updateStatus("সংযুক্ত: " + device.name);
+            return true;
+        }
+        throw new Error("সার্ভিস পাওয়া যায়নি");
+    } catch (error) {
+        updateStatus("ভুল: " + error.message);
+        return false;
+    }
+}
+
+async function handlePrint() {
+    const smsBody = document.getElementById('smsInput').value;
+    const fontSizeValue = parseInt(document.getElementById('fontSize').value);
+
+    if (!smsBody) return alert("প্রিন্ট করার জন্য কিছু লিখুন!");
+
+    if (!printerCharacteristic) {
+        const connected = await connectPrinter();
+        if (!connected) return;
+    }
+
+    try {
+        updateStatus("প্রিন্ট হচ্ছে...");
+        const encoder = new TextEncoder();
+        
+        // হেডার টেক্সট
+        const header = `Right Point\nKewatkhali Near Dhaka Rail\nCrossing, Sadar, Mymensingh\nDate & Time: ${getCurrentDateTime()}\n`;
+        const separator = "--------------------------------\n";
+
+        // ESC/POS কমান্ডসমূহ
+        const init = [0x1b, 0x40]; // প্রিন্টার রিসেট
+        const fontNormal = [0x1d, 0x21, 0x00]; // সাধারণ ফন্ট (হেডারের জন্য)
+        const fontCustom = [0x1d, 0x21, fontSizeValue]; // কাস্টম ফন্ট (বডির জন্য)
+        
+        // ডাটা বিন্যাস
+        const printData = new Uint8Array([
+            ...init,
+            ...fontNormal,
+            ...encoder.encode(header + separator),
+            ...fontCustom,
+            ...encoder.encode(smsBody + "\n\n\n\n") // শেষে কিছু খালি জায়গা
+        ]);
+
+        await printerCharacteristic.writeValue(printData);
+        updateStatus("প্রিন্ট সম্পন্ন!");
+    } catch (error) {
+        updateStatus("প্রিন্ট ব্যর্থ: " + error);
+        printerCharacteristic = null;
+    }
+}
+
+async function sendAction(type) {
+    if (!printerCharacteristic && !(await connectPrinter())) return;
+    if (type === 'feed') {
+        await printerCharacteristic.writeValue(new Uint8Array([0x0a, 0x0a, 0x0a]));
+    }
+}
+
+function clearText() {
+    document.getElementById('smsInput').value = "";
+    updateStatus("ইনপুট ক্লিয়ার করা হয়েছে");
+}
+
+function updateStatus(msg) {
+    document.getElementById('status').innerText = msg;
+}
+</script>
+
+</body>
+</html>
