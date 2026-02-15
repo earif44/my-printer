@@ -7,7 +7,7 @@
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
         .printer-card { background: white; width: 450px; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border-top: 6px solid #28a745; }
-        .header-info { background: #f8f9fa; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 15px; border: 1px dashed #ccc; text-align: center; }
+        .header-info { background: #f8f9fa; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 15px; border: 1px dashed #ccc; text-align: center; color: #333; }
         h2 { margin-top: 0; color: #333; text-align: center; }
         textarea { width: 100%; height: 120px; border: 1px solid #ddd; border-radius: 8px; padding: 12px; font-size: 14px; box-sizing: border-box; margin-bottom: 15px; }
         .settings { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; }
@@ -60,7 +60,6 @@ const COMMON_SERVICES = [
     '49535343-fe7d-4ae5-8fa9-9fafd205e455'
 ];
 
-// বর্তমান সময় ফরম্যাট করার ফাংশন (DD-Feb-YY HH:MM AM/PM)
 function getCurrentDateTime() {
     const now = new Date();
     const options = { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true };
@@ -112,25 +111,31 @@ async function handlePrint() {
         updateStatus("প্রিন্ট হচ্ছে...");
         const encoder = new TextEncoder();
         
-        // হেডার টেক্সট
         const header = `Right Point\nKewatkhali Near Dhaka Rail\nCrossing, Sadar, Mymensingh\nDate & Time: ${getCurrentDateTime()}\n`;
         const separator = "--------------------------------\n";
 
-        // ESC/POS কমান্ডসমূহ
-        const init = [0x1b, 0x40]; // প্রিন্টার রিসেট
-        const fontNormal = [0x1d, 0x21, 0x00]; // সাধারণ ফন্ট (হেডারের জন্য)
-        const fontCustom = [0x1d, 0x21, fontSizeValue]; // কাস্টম ফন্ট (বডির জন্য)
+        const init = [0x1b, 0x40]; 
+        const fontNormal = [0x1d, 0x21, 0x00]; 
+        const fontCustom = [0x1d, 0x21, fontSizeValue]; 
         
-        // ডাটা বিন্যাস
+        // সম্পূর্ণ ডাটা প্যাকেট তৈরি
         const printData = new Uint8Array([
             ...init,
             ...fontNormal,
             ...encoder.encode(header + separator),
             ...fontCustom,
-            ...encoder.encode(smsBody + "\n\n\n\n") // শেষে কিছু খালি জায়গা
+            ...encoder.encode(smsBody + "\n\n\n\n\n") 
         ]);
 
-        await printerCharacteristic.writeValue(printData);
+        // মোবাইল ব্লুটুথ লিমিট সমস্যার সমাধান (Chunking)
+        const CHUNK_SIZE = 20; 
+        for (let i = 0; i < printData.length; i += CHUNK_SIZE) {
+            const chunk = printData.slice(i, i + CHUNK_SIZE);
+            await printerCharacteristic.writeValue(chunk);
+            // ডাটা প্রসেস হওয়ার জন্য ২০ মিলিসেকেন্ড সময় দেয়া
+            await new Promise(resolve => setTimeout(resolve, 20)); 
+        }
+
         updateStatus("প্রিন্ট সম্পন্ন!");
     } catch (error) {
         updateStatus("প্রিন্ট ব্যর্থ: " + error);
