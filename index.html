@@ -3,35 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Right Point - Thermal Print</title>
+    <title>Right Point - Turbo Print</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .printer-card { background: white; width: 450px; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border-top: 6px solid #28a745; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .printer-card { background: white; width: 450px; padding: 25px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border-top: 6px solid #28a745; }
         .header-info { background: #f8f9fa; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 15px; border: 1px dashed #ccc; text-align: center; color: #333; }
         h2 { margin-top: 0; color: #333; text-align: center; }
-        textarea { width: 100%; height: 120px; border: 1px solid #ddd; border-radius: 8px; padding: 12px; font-size: 14px; box-sizing: border-box; margin-bottom: 15px; }
+        textarea { width: 100%; height: 120px; border: 1px solid #ddd; border-radius: 8px; padding: 12px; font-size: 16px; box-sizing: border-box; margin-bottom: 15px; }
         .settings { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; }
         select { padding: 8px; border-radius: 5px; border: 1px solid #ddd; flex-grow: 1; }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         button { padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.3s; }
         .btn-print { background: #28a745; color: white; grid-column: span 2; font-size: 16px; }
-        .btn-print:hover { background: #218838; }
         .btn-feed { background: #6c757d; color: white; }
         .btn-clear { background: #dc3545; color: white; }
         .status { margin-top: 20px; font-size: 13px; color: #666; text-align: center; border-top: 1px solid #eee; padding-top: 10px; }
+        canvas { display: none; }
     </style>
 </head>
 <body>
 
 <div class="printer-card">
     <h2>Right Point Printer</h2>
-    
     <div class="header-info">
         <strong>Default Header:</strong><br>
         Right Point, Kewatkhali Near Dhaka Rail Crossing, Sadar, Mymensingh
     </div>
 
-    <textarea id="smsInput" placeholder="প্রিন্ট করার জন্য এসএমএস এখানে লিখুন..."></textarea>
+    <textarea id="smsInput" placeholder="বাংলা বা ইংরেজি এসএমএস লিখুন..."></textarea>
     
     <div class="settings">
         <label>ফন্ট সাইজ:</label>
@@ -39,7 +38,6 @@
             <option value="0">Normal (ছোট)</option>
             <option value="16">Medium (মাঝারি)</option>
             <option value="32">Large (বড়)</option>
-            <option value="48">Extra Large (খুব বড়)</option>
         </select>
     </div>
 
@@ -50,15 +48,13 @@
     </div>
 
     <div id="status" class="status">প্রিন্টার সংযুক্ত নেই</div>
+    <canvas id="printCanvas"></canvas>
 </div>
 
 <script>
+let printerDevice = null;
 let printerCharacteristic = null;
-const COMMON_SERVICES = [
-    '0000ff00-0000-1000-8000-00805f9b34fb',
-    '000018f0-0000-1000-8000-00805f9b34fb',
-    '49535343-fe7d-4ae5-8fa9-9fafd205e455'
-];
+const COMMON_SERVICES = ['0000ff00-0000-1000-8000-00805f9b34fb', '000018f0-0000-1000-8000-00805f9b34fb', '49535343-fe7d-4ae5-8fa9-9fafd205e455'];
 
 function getCurrentDateTime() {
     const now = new Date();
@@ -66,16 +62,19 @@ function getCurrentDateTime() {
     return now.toLocaleString('en-GB', options).replace(',', '');
 }
 
+// বাংলা অক্ষর আছে কি না চেক করার ফাংশন
+function hasBangla(text) {
+    return /[\u0980-\u09FF]/.test(text);
+}
+
 async function connectPrinter() {
     try {
-        updateStatus("প্রিন্টার খোঁজা হচ্ছে...");
-        const device = await navigator.bluetooth.requestDevice({
+        updateStatus("খোঁজা হচ্ছে...");
+        printerDevice = await navigator.bluetooth.requestDevice({
             filters: [{ namePrefix: '581PW' }, { namePrefix: 'Deli' }, { namePrefix: 'Printer' }],
             optionalServices: COMMON_SERVICES
         });
-
-        const server = await device.gatt.connect();
-        
+        const server = await printerDevice.gatt.connect();
         for (const uuid of COMMON_SERVICES) {
             try {
                 const service = await server.getPrimaryService(uuid);
@@ -84,9 +83,8 @@ async function connectPrinter() {
                 if (printerCharacteristic) break;
             } catch (e) { continue; }
         }
-
         if (printerCharacteristic) {
-            updateStatus("সংযুক্ত: " + device.name);
+            updateStatus("সংযুক্ত: " + printerDevice.name);
             return true;
         }
         throw new Error("সার্ভিস পাওয়া যায়নি");
@@ -96,69 +94,89 @@ async function connectPrinter() {
     }
 }
 
+// Bitmap conversion for Bangla
+function textToBitmap(text, fSize) {
+    const canvas = document.getElementById('printCanvas');
+    const ctx = canvas.getContext('2d');
+    const width = 384; 
+    const fontSize = fSize === 0 ? 24 : (fSize === 16 ? 32 : 45);
+    
+    ctx.font = `bold ${fontSize}px Arial`;
+    const words = text.split('');
+    let line = '', lines = [];
+    for(let n = 0; n < words.length; n++) {
+        let testLine = line + words[n];
+        if (ctx.measureText(testLine).width > width) { lines.push(line); line = words[n]; } else { line = testLine; }
+    }
+    lines.push(line);
+    canvas.width = width;
+    canvas.height = lines.length * (fontSize + 10);
+    ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "black"; ctx.font = `bold ${fontSize}px Arial`; ctx.textBaseline = "top";
+    lines.forEach((l, i) => ctx.fillText(l, 0, i * (fontSize + 10)));
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = imageData.data;
+    const bitmap = [];
+    for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width / 8; x++) {
+            let byte = 0;
+            for (let bit = 0; bit < 8; bit++) {
+                if (pixels[((y * canvas.width) + (x * 8) + bit) * 4] < 128) byte |= (0x80 >> bit);
+            }
+            bitmap.push(byte);
+        }
+    }
+    return { data: bitmap, width: canvas.width / 8, height: canvas.height };
+}
+
 async function handlePrint() {
     const smsBody = document.getElementById('smsInput').value;
     const fontSizeValue = parseInt(document.getElementById('fontSize').value);
+    if (!smsBody) return alert("কিছু লিখুন!");
 
-    if (!smsBody) return alert("প্রিন্ট করার জন্য কিছু লিখুন!");
-
-    if (!printerCharacteristic) {
-        const connected = await connectPrinter();
-        if (!connected) return;
+    if (!printerCharacteristic || !printerDevice.gatt.connected) {
+        if (!(await connectPrinter())) return;
     }
 
     try {
         updateStatus("প্রিন্ট হচ্ছে...");
         const encoder = new TextEncoder();
+        const setDensity = [0x12, 0x23, 0x03]; // Darkness Set
+        const headerText = `Right Point\nKewatkhali Near Dhaka Rail\nCrossing, Sadar, Mymensingh\nDate & Time: ${getCurrentDateTime()}\n--------------------------------\n`;
         
-        const header = `Right Point\nKewatkhali Near Dhaka Rail\nCrossing, Sadar, Mymensingh\nDate & Time: ${getCurrentDateTime()}\n`;
-        const separator = "--------------------------------\n";
+        let finalPayload;
 
-        const init = [0x1b, 0x40]; 
-        const fontNormal = [0x1d, 0x21, 0x00]; 
-        const fontCustom = [0x1d, 0x21, fontSizeValue]; 
-        
-        // সম্পূর্ণ ডাটা প্যাকেট তৈরি
-        const printData = new Uint8Array([
-            ...init,
-            ...fontNormal,
-            ...encoder.encode(header + separator),
-            ...fontCustom,
-            ...encoder.encode(smsBody + "\n\n\n\n\n") 
-        ]);
-
-        // মোবাইল ব্লুটুথ লিমিট সমস্যার সমাধান (Chunking)
-        const CHUNK_SIZE = 20; 
-        for (let i = 0; i < printData.length; i += CHUNK_SIZE) {
-            const chunk = printData.slice(i, i + CHUNK_SIZE);
-            await printerCharacteristic.writeValue(chunk);
-            // ডাটা প্রসেস হওয়ার জন্য ২০ মিলিসেকেন্ড সময় দেয়া
-            await new Promise(resolve => setTimeout(resolve, 20)); 
+        if (hasBangla(smsBody)) {
+            // বাংলা থাকলে: ইমেজ মোড (একটু সময় নিবে)
+            const bitmap = textToBitmap(smsBody, fontSizeValue);
+            const bitmapHeader = [0x1d, 0x76, 0x30, 0x00, bitmap.width & 0xff, (bitmap.width >> 8) & 0xff, bitmap.height & 0xff, (bitmap.height >> 8) & 0xff];
+            finalPayload = new Uint8Array([0x1b, 0x40, ...setDensity, 0x1b, 0x45, 0x01, ...encoder.encode(headerText), ...bitmapHeader, ...bitmap.data, 0x0a, 0x0a, 0x0a]);
+        } else {
+            // শুধু ইংরেজি থাকলে: টেক্সট মোড (সুপার ফাস্ট)
+            finalPayload = new Uint8Array([0x1b, 0x40, ...setDensity, 0x1b, 0x45, 0x01, ...encoder.encode(headerText), 0x1d, 0x21, fontSizeValue, ...encoder.encode(smsBody + "\n\n\n\n")]);
         }
 
+        // স্পিড বাড়ানোর জন্য CHUNK_SIZE বাড়ানো হয়েছে
+        const CHUNK_SIZE = 120; 
+        for (let i = 0; i < finalPayload.length; i += CHUNK_SIZE) {
+            await printerCharacteristic.writeValue(finalPayload.slice(i, i + CHUNK_SIZE));
+            await new Promise(r => setTimeout(r, 5)); // ডিলে কমানো হয়েছে
+        }
         updateStatus("প্রিন্ট সম্পন্ন!");
     } catch (error) {
-        updateStatus("প্রিন্ট ব্যর্থ: " + error);
+        updateStatus("ব্যর্থ: " + error.message);
         printerCharacteristic = null;
     }
 }
 
 async function sendAction(type) {
     if (!printerCharacteristic && !(await connectPrinter())) return;
-    if (type === 'feed') {
-        await printerCharacteristic.writeValue(new Uint8Array([0x0a, 0x0a, 0x0a]));
-    }
+    if (type === 'feed') await printerCharacteristic.writeValue(new Uint8Array([0x0a, 0x0a, 0x0a]));
 }
 
-function clearText() {
-    document.getElementById('smsInput').value = "";
-    updateStatus("ইনপুট ক্লিয়ার করা হয়েছে");
-}
-
-function updateStatus(msg) {
-    document.getElementById('status').innerText = msg;
-}
+function clearText() { document.getElementById('smsInput').value = ""; updateStatus("ক্লিয়ার করা হয়েছে"); }
+function updateStatus(msg) { document.getElementById('status').innerText = msg; }
 </script>
-
 </body>
 </html>
