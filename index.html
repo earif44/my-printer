@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Right Point - Turbo Print</title>
+    <title>Right Point - Universal Turbo</title>
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
         .printer-card { background: white; width: 450px; padding: 25px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border-top: 6px solid #28a745; }
@@ -62,14 +62,13 @@ function getCurrentDateTime() {
     return now.toLocaleString('en-GB', options).replace(',', '');
 }
 
-// বাংলা অক্ষর আছে কি না চেক করার ফাংশন
 function hasBangla(text) {
     return /[\u0980-\u09FF]/.test(text);
 }
 
 async function connectPrinter() {
     try {
-        updateStatus("খোঁজা হচ্ছে...");
+        updateStatus("প্রিন্টার খোঁজা হচ্ছে...");
         printerDevice = await navigator.bluetooth.requestDevice({
             filters: [{ namePrefix: '581PW' }, { namePrefix: 'Deli' }, { namePrefix: 'Printer' }],
             optionalServices: COMMON_SERVICES
@@ -94,7 +93,6 @@ async function connectPrinter() {
     }
 }
 
-// Bitmap conversion for Bangla
 function textToBitmap(text, fSize) {
     const canvas = document.getElementById('printCanvas');
     const ctx = canvas.getContext('2d');
@@ -110,7 +108,7 @@ function textToBitmap(text, fSize) {
     }
     lines.push(line);
     canvas.width = width;
-    canvas.height = lines.length * (fontSize + 10);
+    canvas.height = lines.length * (fontSize + 10) + 10;
     ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "black"; ctx.font = `bold ${fontSize}px Arial`; ctx.textBaseline = "top";
     lines.forEach((l, i) => ctx.fillText(l, 0, i * (fontSize + 10)));
@@ -142,26 +140,25 @@ async function handlePrint() {
     try {
         updateStatus("প্রিন্ট হচ্ছে...");
         const encoder = new TextEncoder();
-        const setDensity = [0x12, 0x23, 0x03]; // Darkness Set
+        const setDensity = [0x12, 0x23, 0x03]; 
         const headerText = `Right Point\nKewatkhali Near Dhaka Rail\nCrossing, Sadar, Mymensingh\nDate & Time: ${getCurrentDateTime()}\n--------------------------------\n`;
         
         let finalPayload;
-
         if (hasBangla(smsBody)) {
-            // বাংলা থাকলে: ইমেজ মোড (একটু সময় নিবে)
             const bitmap = textToBitmap(smsBody, fontSizeValue);
             const bitmapHeader = [0x1d, 0x76, 0x30, 0x00, bitmap.width & 0xff, (bitmap.width >> 8) & 0xff, bitmap.height & 0xff, (bitmap.height >> 8) & 0xff];
             finalPayload = new Uint8Array([0x1b, 0x40, ...setDensity, 0x1b, 0x45, 0x01, ...encoder.encode(headerText), ...bitmapHeader, ...bitmap.data, 0x0a, 0x0a, 0x0a]);
         } else {
-            // শুধু ইংরেজি থাকলে: টেক্সট মোড (সুপার ফাস্ট)
             finalPayload = new Uint8Array([0x1b, 0x40, ...setDensity, 0x1b, 0x45, 0x01, ...encoder.encode(headerText), 0x1d, 0x21, fontSizeValue, ...encoder.encode(smsBody + "\n\n\n\n")]);
         }
 
-        // স্পিড বাড়ানোর জন্য CHUNK_SIZE বাড়ানো হয়েছে
-        const CHUNK_SIZE = 120; 
+        // --- সেফ টার্বো মোড (Mobile + PC Compatible) ---
+        const CHUNK_SIZE = 64; // ২০ থেকে বাড়িয়ে ৬৪ করা হয়েছে (ব্যালেন্সড)
         for (let i = 0; i < finalPayload.length; i += CHUNK_SIZE) {
-            await printerCharacteristic.writeValue(finalPayload.slice(i, i + CHUNK_SIZE));
-            await new Promise(r => setTimeout(r, 5)); // ডিলে কমানো হয়েছে
+            const chunk = finalPayload.slice(i, i + CHUNK_SIZE);
+            await printerCharacteristic.writeValue(chunk);
+            // ১০ms ডিলে দেওয়া হয়েছে যাতে মোবাইল ব্লুটুথ চিপ রিল্যাক্স করতে পারে
+            await new Promise(r => setTimeout(r, 10)); 
         }
         updateStatus("প্রিন্ট সম্পন্ন!");
     } catch (error) {
