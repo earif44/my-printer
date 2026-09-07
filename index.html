@@ -12,7 +12,10 @@
         textarea { width: 100%; height: 120px; border: 1px solid #ddd; border-radius: 8px; padding: 12px; font-size: 14px; box-sizing: border-box; margin-bottom: 15px; }
         .settings { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; }
         .settings label { width: 110px; font-size: 14px; }
-        select { padding: 8px; border-radius: 5px; border: 1px solid #ddd; flex-grow: 1; }
+        select, input[type="file"] { padding: 8px; border-radius: 5px; border: 1px solid #ddd; flex-grow: 1; }
+        .image-preview-container { display: none; text-align: center; margin-bottom: 15px; position: relative; }
+        .image-preview-container img { max-width: 100%; max-height: 180px; border-radius: 8px; border: 1px solid #ddd; }
+        .btn-remove-img { background: #dc3545; color: white; border: none; padding: 4px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; margin-top: 5px; }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         button { padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.3s; }
         .btn-print { background: #28a745; color: white; grid-column: span 2; font-size: 16px; }
@@ -35,6 +38,19 @@
 
     <textarea id="smsInput" placeholder="এখানে লিখুন (বাংলা/English)..."></textarea>
     
+    <!-- ইমেজ সিলেক্ট করার অপশন -->
+    <div class="settings">
+        <label>ছবি নির্বাচন:</label>
+        <input type="file" id="imageInput" accept="image/*" onchange="previewImage(event)">
+    </div>
+
+    <!-- ইমেজ প্রিভিউ এলাকা -->
+    <div id="imagePreviewContainer" class="image-preview-container">
+        <img id="imagePreview" alt="Image Preview">
+        <br>
+        <button type="button" class="btn-remove-img" onclick="removeImage()">ছবি সরান</button>
+    </div>
+
     <div class="settings">
         <label>ফন্ট সাইজ:</label>
         <select id="fontSize">
@@ -50,7 +66,7 @@
         <select id="printDensity">
             <option value="0">Normal (সাধারণ)</option>
             <option value="2">Medium Dark (মাঝারি কালো)</option>
-            <option value="4" selected>Dark (গাড় কালো - পুরোনো পেপারের জন্য)</option>
+            <option value="4" selected>Dark (গাড় কালো - পুরোনো পেপারের জন্য)</option>
             <option value="8">Extra Dark (সর্বোচ্চ কালো)</option>
         </select>
     </div>
@@ -91,6 +107,26 @@ function getCurrentDateTime() {
 // বাংলা অক্ষর আছে কি না চেক করার ফাংশন
 function hasBangla(text) {
     return /[\u0980-\u09FF]/.test(text);
+}
+
+// ছবি প্রিভিউ দেখানোর ফাংশন
+function previewImage(event) {
+    const file = event.target.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            document.getElementById('imagePreview').src = e.target.result;
+            document.getElementById('imagePreviewContainer').style.display = 'block';
+        }
+        reader.readAsDataURL(file);
+    }
+}
+
+// সিলেক্ট করা ছবি সরানোর ফাংশন
+function removeImage() {
+    document.getElementById('imageInput').value = '';
+    document.getElementById('imagePreview').src = '';
+    document.getElementById('imagePreviewContainer').style.display = 'none';
 }
 
 async function connectPrinter() {
@@ -159,13 +195,64 @@ function textToBitmap(text, fontSizeVal) {
     return { data: bitmap, width: canvas.width / 8, height: canvas.height };
 }
 
+// সিলেক্ট করা ফাইল থেকে বিটম্যাপ তৈরি করার ফাংশন
+function processImageToBitmap(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const img = new Image();
+            img.onload = function() {
+                const canvas = document.getElementById('printCanvas');
+                const ctx = canvas.getContext('2d');
+                const targetWidth = 384; // 58mm প্রিন্টারের পিক্সেল উইডথ
+                const scale = targetWidth / img.width;
+                const targetHeight = Math.round(img.height * scale);
+
+                canvas.width = targetWidth;
+                canvas.height = targetHeight;
+
+                ctx.fillStyle = "white";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const pixels = imageData.data;
+                const bitmap = [];
+
+                for (let y = 0; y < canvas.height; y++) {
+                    for (let x = 0; x < canvas.width / 8; x++) {
+                        let byte = 0;
+                        for (let bit = 0; bit < 8; bit++) {
+                            const pxIndex = ((y * canvas.width) + (x * 8) + bit) * 4;
+                            const r = pixels[pxIndex];
+                            const g = pixels[pxIndex + 1];
+                            const b = pixels[pxIndex + 2];
+                            const avg = (r + g + b) / 3;
+                            if (avg < 128) {
+                                byte |= (0x80 >> bit);
+                            }
+                        }
+                        bitmap.push(byte);
+                    }
+                }
+                resolve({ data: bitmap, width: canvas.width / 8, height: canvas.height });
+            };
+            img.onerror = reject;
+            img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
 async function handlePrint() {
     const smsBody = document.getElementById('smsInput').value;
     const fontSizeValue = parseInt(document.getElementById('fontSize').value);
     const printDensityValue = parseInt(document.getElementById('printDensity').value);
     const printSpeedValue = parseInt(document.getElementById('printSpeed').value);
+    const imageFile = document.getElementById('imageInput').files[0];
 
-    if (!smsBody) return alert("কিছু লিখুন!");
+    if (!smsBody && !imageFile) return alert("কিছু লিখুন অথবা একটি ছবি সিলেক্ট করুন!");
 
     if (!printerCharacteristic) {
         if (!(await connectPrinter())) return;
@@ -180,20 +267,33 @@ async function handlePrint() {
         const configCmds = [
             0x1b, 0x40,                         // Initialize printer
             0x1d, 0x7c, printDensityValue,      // Set Print Density
-            0x1b, 0x73, printSpeedValue         // Set Print Speed
+            0x1b, 0x73, printSpeedValue          // Set Print Speed
         ];
 
-        let printData;
-        
-        if (hasBangla(smsBody)) {
-            // বাংলা থাকলে: ইমেজ মোড
-            const bitmap = textToBitmap(smsBody, fontSizeValue);
-            const bitmapHeader = [0x1d, 0x76, 0x30, 0x00, bitmap.width & 0xff, (bitmap.width >> 8) & 0xff, bitmap.height & 0xff, (bitmap.height >> 8) & 0xff];
-            printData = new Uint8Array([...configCmds, ...encoder.encode(header), ...bitmapHeader, ...bitmap.data, 0x0a, 0x0a, 0x0a, 0x0a]);
-        } else {
-            // শুধু ইংরেজি থাকলে: টেক্সট মোড (সুপার ফাস্ট)
-            printData = new Uint8Array([...configCmds, ...encoder.encode(header), 0x1d, 0x21, fontSizeValue, ...encoder.encode(smsBody + "\n\n\n\n\n")]);
+        let payloadBytes = [...configCmds, ...encoder.encode(header)];
+
+        // টেক্সট থাকলে তা প্রসেস করা
+        if (smsBody) {
+            if (hasBangla(smsBody)) {
+                const textBitmap = textToBitmap(smsBody, fontSizeValue);
+                const textBitmapHeader = [0x1d, 0x76, 0x30, 0x00, textBitmap.width & 0xff, (textBitmap.width >> 8) & 0xff, textBitmap.height & 0xff, (textBitmap.height >> 8) & 0xff];
+                payloadBytes.push(...textBitmapHeader, ...textBitmap.data, 0x0a);
+            } else {
+                payloadBytes.push(0x1d, 0x21, fontSizeValue, ...encoder.encode(smsBody + "\n"));
+            }
         }
+
+        // ছবি সিলেক্ট করা থাকলে তা প্রসেস করে প্রিন্ট ডেটায় যুক্ত করা
+        if (imageFile) {
+            const imgBitmap = await processImageToBitmap(imageFile);
+            const imgBitmapHeader = [0x1d, 0x76, 0x30, 0x00, imgBitmap.width & 0xff, (imgBitmap.width >> 8) & 0xff, imgBitmap.height & 0xff, (imgBitmap.height >> 8) & 0xff];
+            payloadBytes.push(...imgBitmapHeader, ...imgBitmap.data, 0x0a);
+        }
+
+        // শেষে কয়েক লাইন ফীড দেওয়া
+        payloadBytes.push(0x0a, 0x0a, 0x0a, 0x0a);
+
+        const printData = new Uint8Array(payloadBytes);
 
         const CHUNK_SIZE = 64; 
         for (let i = 0; i < printData.length; i += CHUNK_SIZE) {
@@ -212,7 +312,12 @@ async function sendAction(type) {
     if (type === 'feed') await printerCharacteristic.writeValue(new Uint8Array([0x0a, 0x0a, 0x0a]));
 }
 
-function clearText() { document.getElementById('smsInput').value = ""; updateStatus("ক্লিয়ার করা হয়েছে"); }
+function clearText() { 
+    document.getElementById('smsInput').value = ""; 
+    removeImage();
+    updateStatus("ক্লিয়ার করা হয়েছে"); 
+}
+
 function updateStatus(msg) { document.getElementById('status').innerText = msg; }
 </script>
 </body>
