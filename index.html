@@ -160,10 +160,10 @@ function textToBitmap(text, fontSizeVal) {
     const canvas = document.getElementById('printCanvas');
     const ctx = canvas.getContext('2d');
     const width = 384; 
-    // ইমেজের জন্য ফন্ট সাইজ অ্যাডজাস্টমেন্ট
     let fs = fontSizeVal === 0 ? 24 : (fontSizeVal === 16 ? 32 : (fontSizeVal === 32 ? 42 : 55));
     
-    ctx.font = `bold ${fs}px Arial, sans-serif`;
+    // 900 ওজন ব্যবহার করে আরও মোটা বোল্ড ফন্ট সেট করা
+    ctx.font = `900 ${fs}px Arial, sans-serif`;
     const lines = [];
     let currentLine = "";
     const words = text.split(""); 
@@ -176,8 +176,12 @@ function textToBitmap(text, fontSizeVal) {
     lines.push(currentLine);
     canvas.width = width;
     canvas.height = lines.length * (fs + 10) + 10;
-    ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "black"; ctx.font = `bold ${fs}px Arial, sans-serif`; ctx.textBaseline = "top";
+    
+    ctx.fillStyle = "white"; 
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "black"; 
+    ctx.font = `900 ${fs}px Arial, sans-serif`; 
+    ctx.textBaseline = "top";
     lines.forEach((l, i) => ctx.fillText(l, 0, i * (fs + 10)));
 
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -187,7 +191,8 @@ function textToBitmap(text, fontSizeVal) {
         for (let x = 0; x < canvas.width / 8; x++) {
             let byte = 0;
             for (let bit = 0; bit < 8; bit++) {
-                if (pixels[((y * canvas.width) + (x * 8) + bit) * 4] < 128) byte |= (0x80 >> bit);
+                // পিক্সেল থ্রেশহোল্ড ১৮০ রাখা হয়েছে যাতে মোটা স্ট্রোক ধরা পড়ে
+                if (pixels[((y * canvas.width) + (x * 8) + bit) * 4] < 180) byte |= (0x80 >> bit);
             }
             bitmap.push(byte);
         }
@@ -228,7 +233,8 @@ function processImageToBitmap(file) {
                             const g = pixels[pxIndex + 1];
                             const b = pixels[pxIndex + 2];
                             const avg = (r + g + b) / 3;
-                            if (avg < 128) {
+                            // ইমেজ প্রক্রিয়াকরণে পিক্সেল ব্রাইটনেস থ্রেশহোল্ড ১৬০ সেট করা হয়েছে
+                            if (avg < 160) {
                                 byte |= (0x80 >> bit);
                             }
                         }
@@ -263,11 +269,12 @@ async function handlePrint() {
         const encoder = new TextEncoder();
         const header = `Right Point\nKewatkhali Bazar, Mosjid Oposit, Sadar, Mymensingh-01724571114\nDate & Time: ${getCurrentDateTime()}\n--------------------------------\n`;
         
-        // কালির ঘনত্ব (Density) এবং প্রিন্টিং স্পিড (Speed) কমান্ড সেটআপ
+        // কালির ঘনত্ব (Density), প্রিন্টিং স্পিড (Speed) এবং Bold mode (0x1b, 0x45, 0x01) کمان্ড সেটআপ
         const configCmds = [
             0x1b, 0x40,                         // Initialize printer
             0x1d, 0x7c, printDensityValue,      // Set Print Density
-            0x1b, 0x73, printSpeedValue          // Set Print Speed
+            0x1b, 0x73, printSpeedValue,        // Set Print Speed
+            0x1b, 0x45, 0x01                    // Turn ON Bold Mode (Emphasized text)
         ];
 
         let payloadBytes = [...configCmds, ...encoder.encode(header)];
@@ -290,8 +297,8 @@ async function handlePrint() {
             payloadBytes.push(...imgBitmapHeader, ...imgBitmap.data, 0x0a);
         }
 
-        // শেষে কয়েক লাইন ফীড দেওয়া
-        payloadBytes.push(0x0a, 0x0a, 0x0a, 0x0a);
+        // শেষে কয়েক লাইন ফীড দেওয়া এবং Bold বন্ধ করা
+        payloadBytes.push(0x1b, 0x45, 0x00, 0x0a, 0x0a, 0x0a, 0x0a);
 
         const printData = new Uint8Array(payloadBytes);
 
