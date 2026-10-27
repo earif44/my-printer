@@ -58,6 +58,7 @@
             <option value="16">Medium (মাঝারি)</option>
             <option value="32">Large (বড়)</option>
             <option value="48">Extra Large (খুব বড়)</option>
+            <option value="76">5 Digits Per Line (প্রতি লাইনে ৫টি সংখ্যা)</option>
         </select>
     </div>
 
@@ -160,7 +161,9 @@ function textToBitmap(text, fontSizeVal) {
     const canvas = document.getElementById('printCanvas');
     const ctx = canvas.getContext('2d');
     const width = 384; 
-    let fs = fontSizeVal === 0 ? 24 : (fontSizeVal === 16 ? 32 : (fontSizeVal === 32 ? 42 : 55));
+    
+    // ফন্ট সাইজ নির্ধারণ (নতুন অপশনের জন্য ৭৬ পিক্সেল)
+    let fs = fontSizeVal === 0 ? 24 : (fontSizeVal === 16 ? 32 : (fontSizeVal === 32 ? 42 : (fontSizeVal === 48 ? 55 : 76)));
     
     // 900 ওজন ব্যবহার করে আরও মোটা বোল্ড ফন্ট সেট করা
     ctx.font = `900 ${fs}px Arial, sans-serif`;
@@ -191,7 +194,6 @@ function textToBitmap(text, fontSizeVal) {
         for (let x = 0; x < canvas.width / 8; x++) {
             let byte = 0;
             for (let bit = 0; bit < 8; bit++) {
-                // পিক্সেল থ্রেশহোল্ড ১৮০ রাখা হয়েছে যাতে মোটা স্ট্রোক ধরা পড়ে
                 if (pixels[((y * canvas.width) + (x * 8) + bit) * 4] < 180) byte |= (0x80 >> bit);
             }
             bitmap.push(byte);
@@ -209,7 +211,7 @@ function processImageToBitmap(file) {
             img.onload = function() {
                 const canvas = document.getElementById('printCanvas');
                 const ctx = canvas.getContext('2d');
-                const targetWidth = 384; // 58mm প্রিন্টারের পিক্সেল উইডথ
+                const targetWidth = 384; 
                 const scale = targetWidth / img.width;
                 const targetHeight = Math.round(img.height * scale);
 
@@ -233,7 +235,6 @@ function processImageToBitmap(file) {
                             const g = pixels[pxIndex + 1];
                             const b = pixels[pxIndex + 2];
                             const avg = (r + g + b) / 3;
-                            // ইমেজ প্রক্রিয়াকরণে পিক্সেল ব্রাইটনেস থ্রেশহোল্ড ১৬০ সেট করা হয়েছে
                             if (avg < 160) {
                                 byte |= (0x80 >> bit);
                             }
@@ -269,19 +270,18 @@ async function handlePrint() {
         const encoder = new TextEncoder();
         const header = `Right Point\nKewatkhali Bazar, Mosjid Oposit, Sadar, Mymensingh-01724571114\nDate & Time: ${getCurrentDateTime()}\n--------------------------------\n`;
         
-        // কালির ঘনত্ব (Density), প্রিন্টিং স্পিড (Speed) এবং Bold mode (0x1b, 0x45, 0x01) کمان্ড সেটআপ
         const configCmds = [
-            0x1b, 0x40,                         // Initialize printer
-            0x1d, 0x7c, printDensityValue,      // Set Print Density
-            0x1b, 0x73, printSpeedValue,        // Set Print Speed
-            0x1b, 0x45, 0x01                    // Turn ON Bold Mode (Emphasized text)
+            0x1b, 0x40,                         
+            0x1d, 0x7c, printDensityValue,      
+            0x1b, 0x73, printSpeedValue,        
+            0x1b, 0x45, 0x01                    
         ];
 
         let payloadBytes = [...configCmds, ...encoder.encode(header)];
 
-        // টেক্সট থাকলে তা প্রসেস করা
         if (smsBody) {
-            if (hasBangla(smsBody)) {
+            // ৫টি সংখ্যার অপশন বা বাংলা থাকলে ইমেজ মোড ব্যবহার করা হবে যাতে নিখুঁত সাইজ ও ব্রেক কাজ করে
+            if (hasBangla(smsBody) || fontSizeValue === 76) {
                 const textBitmap = textToBitmap(smsBody, fontSizeValue);
                 const textBitmapHeader = [0x1d, 0x76, 0x30, 0x00, textBitmap.width & 0xff, (textBitmap.width >> 8) & 0xff, textBitmap.height & 0xff, (textBitmap.height >> 8) & 0xff];
                 payloadBytes.push(...textBitmapHeader, ...textBitmap.data, 0x0a);
@@ -290,14 +290,12 @@ async function handlePrint() {
             }
         }
 
-        // ছবি সিলেক্ট করা থাকলে তা প্রসেস করে প্রিন্ট ডেটায় যুক্ত করা
         if (imageFile) {
             const imgBitmap = await processImageToBitmap(imageFile);
             const imgBitmapHeader = [0x1d, 0x76, 0x30, 0x00, imgBitmap.width & 0xff, (imgBitmap.width >> 8) & 0xff, imgBitmap.height & 0xff, (imgBitmap.height >> 8) & 0xff];
             payloadBytes.push(...imgBitmapHeader, ...imgBitmap.data, 0x0a);
         }
 
-        // শেষে কয়েক লাইন ফীড দেওয়া এবং Bold বন্ধ করা
         payloadBytes.push(0x1b, 0x45, 0x00, 0x0a, 0x0a, 0x0a, 0x0a);
 
         const printData = new Uint8Array(payloadBytes);
